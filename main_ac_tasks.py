@@ -5,7 +5,7 @@ CACHE_ROOT = "data/NeurIPS2024"
 CONFERENCE_ID = 'NeurIPS.cc/2024/Conference'
 GSHEET_JSON = "/Users/joon/Downloads/inner-bridge-282608-046515c1295b.json"
 GSHEET_TITLE = "NeurIPS2024 AC DB"
-GSHEET_SHEET = "AC"
+GSHEET_SHEET = "Discussion"
 
 
 class OpenReviewACPapers(OpenReviewPapers):
@@ -49,13 +49,27 @@ class OpenReviewACPapers(OpenReviewPapers):
                       for review in reviews
                       if 'rating' in review.content]
 
+            forum_notes = self.openreview_client.get_notes(forum=paper.forum)
+            reviewers = [review.signatures[0] for review in reviews]
+
+            rebuttal_exists = False
+            num_participating_reviewers = 0
+            for note in forum_notes:
+                if "rebuttal" in note.content:
+                    rebuttal_exists = True
+                if ("comment" in note.content) and (note.signatures[0] in reviewers):
+                    num_participating_reviewers += 1
+
+
             paper_data.append({
                 'paper_title': paper.content['title']['value'],
                 'withdrawn': 'Withdrawn' in paper.content.get('venue', {}).get('value', ''),
                 'paper_number': paper.number,
                 'num_reviewers': len(reviews),
                 'avg_score': round(sum(scores) / len(scores), 2) if scores else 'N/A',
-                'reviewer_scores': ','.join(map(str, sorted(scores, reverse=True))) if scores else 'N/A'
+                'reviewer_scores': ','.join(map(str, sorted(scores, reverse=True))) if scores else 'N/A',
+                'rebuttal?': rebuttal_exists,
+                'reviewer_participation': num_participating_reviewers,
             })
 
         return paper_data
@@ -69,7 +83,11 @@ def main():
 
     gsheet_write = GSheetWithHeader(key_file=GSHEET_JSON, doc_name=GSHEET_TITLE, sheet_name=GSHEET_SHEET)
     gsheet_write.write_rows(rows=ac_papers_list,
-                            headers=sorted(ac_papers_list[0].keys()))
+                            headers=sorted(ac_papers_list[0].keys()),
+                            empty_sheet=False,
+                            write_headers=True,
+                            start_row_idx=0,
+                            batch_size=1000)
 
 
 if __name__ == "__main__":
