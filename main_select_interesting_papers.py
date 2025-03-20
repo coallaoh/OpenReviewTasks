@@ -37,15 +37,6 @@ SYSTEM_MESSAGE_RELEVANCE = (
 ).format(keyword_list=json.dumps(KEYWORDS, indent=2),
          example_json=json.dumps({keyword: random.choice([True, False]) for keyword in KEYWORDS}, indent=2))
 
-SYSTEM_MESSAGE_SENIORITY = (
-    "You are a knowledgeable AI Assistant tasked with inferring the seniority level of an individual as of 2024. "
-    "You are provided with a structured list of experiences and past activities. "
-    "Based on this information, determine the person's current seniority level. "
-    "Possible seniority levels include: Masters student, PhD student, Postdoc, Research scientist, Industrial researcher, Professor, Principal investigator, Group leader, etc. "
-    "If applicable, please specify the year within each program (e.g., PhD student, 4th year). "
-    "Your response should be concise and directly reflect the inferred seniority level, e.g., 'Assistant Professor'."
-)
-
 
 class OpenReviewPapersConference(OpenReviewPapers):
     @check_cache(arg_name='file_name', create_dirs=True, override=False)
@@ -57,24 +48,74 @@ class OpenReviewPapersConference(OpenReviewPapers):
             "authors": [],
         }
         try:
-            author_profiles = openreview.tools.get_profiles(self.openreview_client,
-                                                            submission.content['authorids']['value'])
-            for author_profile in author_profiles:
-                author_data = {
-                    "email": author_profile.content.get("preferredEmail", "N/A"),
-                    "first_name": author_profile.content["names"][0].get("first", "N/A"),
-                    "last_name": author_profile.content["names"][0].get("last", "N/A"),
-                    "history": author_profile.content.get("history", "N/A")
-                }
+            if 'authorids' in submission.content:
+                # Handle API v1 format
+                if isinstance(submission.content['authorids'], list):
+                    author_ids = submission.content['authorids']
+                # Handle API v2 format
+                elif 'value' in submission.content['authorids']:
+                    author_ids = submission.content['authorids']['value']
                 
+                if not author_ids:
+                    return data
+                
+                first_author_profile = openreview.tools.get_profiles(self.openreview_client, [author_ids[0]])[0]
+                if not first_author_profile:
+                    return data
+                
+                history = first_author_profile.content.get("history")
+                is_phd_student = False
+                phd_location = "N/A"
+                if history:
+                    positions = {}
+                    for entry in history:
+                        start_year = entry['start']
+                        end_year = entry['end']
+                        start_display = "" if start_year is None else f"{start_year-2000}"
+                        end_display = "" if end_year is None else f"{end_year-2000}"
+                        positions[start_year] = f"{entry['position']} @ {entry['institution']['name']} ({start_display}-{end_display})"
+                        if entry['position'] == "PhD student":
+                            if start_year is not None and (end_year is None or end_year >= 2025):
+                                is_phd_student = True
+                                alma_mater = entry['institution']['name']
+                                llm_response = chatgpt(
+                                    user_prompts=[f"What is the location of {alma_mater}?"],
+                                    system_prompt="You are a helpful assistant that can answer questions about the location of a university or institution. Choose one of the following: Europe, US, Korea, Asia, Other and return only the location.",
+                                    file_name=os.path.join(CACHE_ROOT, f"{author_ids[0]}_alma_mater_location.pkl")
+                                )[0]
+                                if llm_response.startswith("Europe"):
+                                    phd_location = "Europe"
+                                elif llm_response.startswith("US"):
+                                    phd_location = "US"
+                                elif llm_response.startswith("Korea"):
+                                    phd_location = "Korea"
+                                elif llm_response.startswith("Asia"):
+                                    phd_location = "Asia"
+                                else:
+                                    phd_location = "Other"
+                    sorted_positions = sorted(positions.items(), key=lambda x: x[0], reverse=True)
+                    sorted_positions = [position for _, position in sorted_positions]
+                    position_string = "\n".join(sorted_positions)
+                else:
+                    position_string = "N/A"
+                    
+                author_data = {
+                    "email": first_author_profile.content.get("preferredEmail", "N/A"),
+                    "homepage": first_author_profile.content.get("homepage", "N/A"),
+                    "gscholar": first_author_profile.content.get("gscholar", "N/A"),
+                    "first_name": first_author_profile.content["names"][0].get("first", "N/A"),
+                    "last_name": first_author_profile.content["names"][0].get("last", "N/A"),
+                    "affiliation": position_string,
+                    "is_student": is_phd_student,
+                    "phd_location": phd_location,
+                    "history": history
+                }
                 data["authors"].append(author_data)
-
-        except KeyError:
-            print("Author info unavailable.")
+        except Exception as e:
+            print(f"Error extracting author info from submission {submission.id}: {e}")
             return data
 
         return data
-
     def get_papers_list(self, cache_root):
         submissions = self.openreview_client.get_all_notes(content={'venueid': self.conference_id})
         if DEBUG:
@@ -106,60 +147,24 @@ def check_relevance(data, cache_name):
     
     return {"data": data, "response": response}
 
-def check_seniority(history, cache_name):
-    history_json = json.dumps(history, indent=2)
-    response_str = chatgpt(
-        system_prompt=SYSTEM_MESSAGE_SENIORITY,
-        user_prompts=[f"Context history to analyze: \n###\n{history_json}\n###\n."],
-        file_name=cache_name
-    )[0]
-    
-    # Handle the case where response_str is in the format with ```json
-    if response_str.startswith('```json'):
-        response_str = response_str.strip('```json\n').strip('```')
-    
-    return {"history": history, "response": response_str}
-
 def process_data_for_sheet(data):
     # Check relevance and get output
-    this_output = check_relevance(
+    relevance_output = check_relevance(
         data=data,
         cache_name=os.path.join(CACHE_ROOT, "gpt-3.5-turbo", f"{data['id']}.pkl"))
     
     # Skip if no relevance or if JSON decoding failed
-    if this_output is None or not any(this_output['response'].values()):
+    if relevance_output is None or not any(relevance_output['response'].values()):
         return None
     
-    # Extract author information
-    if this_output['data']['authors']:
-        first_author = this_output['data']['authors'][0]
-        seniority_info = check_seniority(
-            history=first_author['history'],
-            cache_name=os.path.join(CACHE_ROOT, "gpt-3.5-turbo", f"{data['id']}_seniority.pkl"))
-        
-        author_name = f"{first_author['first_name']} {first_author['last_name']}"
-        email = first_author['email']
-        seniority = seniority_info['response']
-    else:
-        author_name = "No Author Info"
-        email = "No Email"
-        seniority = "Unknown"
-    
     # Extract categories
-    categories = ",".join([key for key in this_output['response'] if this_output['response'][key]])
+    categories = ",".join([key for key in relevance_output['response'] if relevance_output['response'][key]])
     
     # Prepare row
     row = {
-        "Title": this_output['data']['title'],
+        **data,
         "Categories": categories,
         "#Categories": len(categories.split(",")),
-        "Match": (
-            re.search(r"Security|Safety|Black box|Audit|Privacy", categories) is not None and
-            re.search(r"VLM|LLM|Multimodal|Foundational models|Vision-language|Agent|Reasoning|Tool|Human|RLHF|RL|Reinforcement learning|Reinforcement learning from human feedback", categories) is not None
-        ),
-        "Seniority": seniority,
-        "Author": author_name,
-        "Email": email
     }
     return row
 
