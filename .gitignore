@@ -1,6 +1,10 @@
 .idea/
 data/
+.vscode/
+.DS_Store
+cache/
 
+inner-bridge-282608-030fbb66c110.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

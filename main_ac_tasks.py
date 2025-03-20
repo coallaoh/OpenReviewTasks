@@ -1,11 +1,13 @@
 from utils.gsheet import GSheetWithHeader
 from utils.openreview import OpenReviewPapers
 
-CACHE_ROOT = "data/NeurIPS2024"
-CONFERENCE_ID = 'NeurIPS.cc/2024/Conference'
-GSHEET_JSON = "/Users/joon/Downloads/inner-bridge-282608-046515c1295b.json"
-GSHEET_TITLE = "NeurIPS2024 AC DB"
-GSHEET_SHEET = "Discussion"
+CACHE_ROOT = "data/ICML2025"
+CONFERENCE_ID = 'ICML.cc/2025/Conference'
+GSHEET_JSON = "inner-bridge-282608-030fbb66c110.json"
+GSHEET_TITLE = "ICML2025 AC DB"
+GSHEET_SHEET = "Sheet1"
+# RATING_FIELD_NAME = "rating"
+RATING_FIELD_NAME = "overall_recommendation"
 
 
 class OpenReviewACPapers(OpenReviewPapers):
@@ -45,9 +47,10 @@ class OpenReviewACPapers(OpenReviewPapers):
             all_notes = self.openreview_client.get_notes(forum=paper.forum)
             invitation_str = f'{self.conference_id}/Submission{paper.number}/-/Official_Review'
             reviews = [note for note in all_notes if invitation_str in note.invitations]
-            scores = [review.content['rating']['value']
+            comments = [note for note in all_notes if invitation_str not in note.invitations]
+            scores = [review.content[RATING_FIELD_NAME]['value']
                       for review in reviews
-                      if 'rating' in review.content]
+                      if RATING_FIELD_NAME in review.content]
 
             forum_notes = self.openreview_client.get_notes(forum=paper.forum)
             reviewers = [review.signatures[0] for review in reviews]
@@ -60,20 +63,26 @@ class OpenReviewACPapers(OpenReviewPapers):
                 if ("comment" in note.content) and (note.signatures[0] in reviewers):
                     num_participating_reviewers += 1
 
+            paper_url = f"https://openreview.net/forum?id={paper.forum}"
 
             paper_data.append({
                 'paper_title': paper.content['title']['value'],
                 'withdrawn': 'Withdrawn' in paper.content.get('venue', {}).get('value', ''),
                 'paper_number': paper.number,
+                'paper_url': paper_url,
                 'num_reviewers': len(reviews),
                 'avg_score': round(sum(scores) / len(scores), 2) if scores else 'N/A',
-                'reviewer_scores': ','.join(map(str, sorted(scores, reverse=True))) if scores else 'N/A',
+                'reviewer1_score': scores[0] if len(scores) >= 1 else '',
+                'reviewer2_score': scores[1] if len(scores) >= 2 else '',
+                'reviewer3_score': scores[2] if len(scores) >= 3 else '',
+                'reviewer4_score': scores[3] if len(scores) >= 4 else '',
+                'reviewer5_score': scores[4] if len(scores) >= 5 else '',
                 'rebuttal?': rebuttal_exists,
                 'reviewer_participation': num_participating_reviewers,
+                'num_comments': len(comments),
             })
 
         return paper_data
-
 
 def main():
     openreview_papers = OpenReviewACPapers(
@@ -83,10 +92,9 @@ def main():
 
     gsheet_write = GSheetWithHeader(key_file=GSHEET_JSON, doc_name=GSHEET_TITLE, sheet_name=GSHEET_SHEET)
     gsheet_write.write_rows(rows=ac_papers_list,
-                            headers=sorted(ac_papers_list[0].keys()),
                             empty_sheet=False,
-                            write_headers=True,
-                            start_row_idx=0,
+                            write_headers=False,
+                            start_row_idx=1,
                             batch_size=1000)
 
 
