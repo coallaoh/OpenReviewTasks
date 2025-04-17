@@ -4,12 +4,19 @@ import tqdm
 
 
 class GSheetWithHeader(GSheetManager):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._headers = None
+
     @property
     def headers(self):
-        return self.local_sheet_values[0]
+        if self._headers is None and self.local_sheet_values:
+            self._headers = self.local_sheet_values[0]
+        return self._headers
 
     def clear_worksheet(self):
         self._worksheet.clear()
+        self._headers = None
         logging.info("Worksheet cleared")
 
     def get_data_list(self):
@@ -21,30 +28,54 @@ class GSheetWithHeader(GSheetManager):
         return data_list
 
     @GSheetManager.batch_sync_with_remote
-    def _write_headers(self, headers, start_row_idx=0):
+    def _write_headers(self, headers, start_row_idx=0, overwrite=False):
         current_row_idx = start_row_idx
+        current_header_idx = len(self.headers) if self.headers else 0
+        
+        if overwrite:
+            _headers = [None] * len(headers)
+        else:
+            _headers = [None] * len(set(headers).union(set(self.headers) if self.headers else set()))
+            for header_idx, header_name in enumerate(self.headers):
+                _headers[header_idx] = header_name
+            
         for header_idx, header_name in enumerate(headers):
-            self._set_buffer_cells(python_row_idx=start_row_idx,
-                                   python_col_idx=header_idx,
-                                   value=header_name)
+            if overwrite:
+                self._set_buffer_cells(python_row_idx=start_row_idx,
+                                       python_col_idx=header_idx,
+                                       value=header_name)
+                _headers[header_idx] = header_name
+            else:
+                if self.headers and header_name in self.headers:
+                    header_original_idx = self.headers.index(header_name)
+                    _headers[header_original_idx] = header_name
+                    
+                else:
+                    self._set_buffer_cells(python_row_idx=start_row_idx,
+                                       python_col_idx=current_header_idx,
+                                       value=header_name)
+                    _headers[current_header_idx] = header_name
+                    current_header_idx += 1
         current_row_idx += 1
+        headers = _headers
         logging.debug(f"Headers written starting at row {start_row_idx}")
-        return current_row_idx
+        return current_row_idx, headers
 
     @GSheetManager.batch_sync_with_remote
     def _write_batch(self, data_list_batch, headers, start_row_idx):
         current_row_idx = start_row_idx
         for row_idx, d in enumerate(data_list_batch):
             for header_idx, header_name in enumerate(headers):
-                self._set_buffer_cells(python_row_idx=start_row_idx + row_idx,
-                                       python_col_idx=header_idx,
-                                       value=d[header_name])
+                if header_name in d:
+                    self._set_buffer_cells(python_row_idx=start_row_idx + row_idx,
+                                           python_col_idx=header_idx,
+                                           value=d[header_name])
             current_row_idx += 1
         logging.debug(f"Batch of {len(data_list_batch)} rows written starting at row {start_row_idx}")
         return current_row_idx
 
     @GSheetManager.batch_sync_with_remote
-    def write_rows(self, rows, empty_sheet=False, headers=None, write_headers=True, start_row_idx=0, batch_size=1000):
+    def write_rows(self, rows, empty_sheet=False, headers=None, write_headers=True, start_row_idx=0, batch_size=1000, index_col=None, overwrite_headers=False):
         if empty_sheet:
             self.clear_worksheet()
             logging.info("Sheet emptied before writing")
@@ -53,10 +84,19 @@ class GSheetWithHeader(GSheetManager):
             headers = self.headers
 
         if write_headers:
-            current_row_idx = self._write_headers(headers, start_row_idx=start_row_idx)
+            current_row_idx, headers = self._write_headers(headers, start_row_idx=start_row_idx, overwrite=overwrite_headers)
         else:
             current_row_idx = start_row_idx
-
+            
+        if index_col is not None:
+            index_col_idx = self.headers[0].index(index_col)
+            indices = [row[index_col_idx] for row in self.local_sheet_values[1:]]
+            if not indices[-1]:
+                indices = indices[:-1]
+            indices = [int(index) for index in indices]
+            rows_dict = {row[index_col]: row for row in rows}
+            rows = [rows_dict[index] for index in indices]
+            
         total_rows = len(rows)
         for idx in tqdm.tqdm(range(0, total_rows, batch_size)):
             current_row_idx = self._write_batch(data_list_batch=rows[idx:idx + batch_size],

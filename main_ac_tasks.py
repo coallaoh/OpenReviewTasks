@@ -8,6 +8,7 @@ GSHEET_TITLE = "ICML2025 AC DB"
 GSHEET_SHEET = "Sheet1"
 # RATING_FIELD_NAME = "rating"
 RATING_FIELD_NAME = "overall_recommendation"
+NOTE_KEYS = {'review': 'summary', 'comment': 'comment', 'acknowledgement': 'acknowledgement', 'rebuttal': 'rebuttal'}
 
 
 class OpenReviewACPapers(OpenReviewPapers):
@@ -47,21 +48,18 @@ class OpenReviewACPapers(OpenReviewPapers):
             all_notes = self.openreview_client.get_notes(forum=paper.forum)
             invitation_str = f'{self.conference_id}/Submission{paper.number}/-/Official_Review'
             reviews = [note for note in all_notes if invitation_str in note.invitations]
-            comments = [note for note in all_notes if invitation_str not in note.invitations]
             scores = [review.content[RATING_FIELD_NAME]['value']
                       for review in reviews
                       if RATING_FIELD_NAME in review.content]
 
             forum_notes = self.openreview_client.get_notes(forum=paper.forum)
-            reviewers = [review.signatures[0] for review in reviews]
+            participating_reviewers = [note.signatures[0] for note in forum_notes if 'comment' in note.content]
 
-            rebuttal_exists = False
-            num_participating_reviewers = 0
+            note_counts = {note_key + '_count': 0 for note_key in NOTE_KEYS}
             for note in forum_notes:
-                if "rebuttal" in note.content:
-                    rebuttal_exists = True
-                if ("comment" in note.content) and (note.signatures[0] in reviewers):
-                    num_participating_reviewers += 1
+                for note_key in NOTE_KEYS:
+                    if note_key in note.content:
+                        note_counts[note_key + '_count'] += 1
 
             paper_url = f"https://openreview.net/forum?id={paper.forum}"
 
@@ -77,9 +75,8 @@ class OpenReviewACPapers(OpenReviewPapers):
                 'reviewer3_score': scores[2] if len(scores) >= 3 else '',
                 'reviewer4_score': scores[3] if len(scores) >= 4 else '',
                 'reviewer5_score': scores[4] if len(scores) >= 5 else '',
-                'rebuttal?': rebuttal_exists,
-                'reviewer_participation': num_participating_reviewers,
-                'num_comments': len(comments),
+                **note_counts,
+                'reviewer_participation': len(participating_reviewers),
             })
 
         return paper_data
@@ -93,8 +90,11 @@ def main():
     gsheet_write = GSheetWithHeader(key_file=GSHEET_JSON, doc_name=GSHEET_TITLE, sheet_name=GSHEET_SHEET)
     gsheet_write.write_rows(rows=ac_papers_list,
                             empty_sheet=False,
-                            write_headers=False,
-                            start_row_idx=1,
+                            headers=ac_papers_list[0].keys(),
+                            index_col='paper_number',
+                            write_headers=True,
+                            overwrite_headers=False,
+                            start_row_idx=0,
                             batch_size=1000)
 
 

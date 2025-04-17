@@ -12,13 +12,13 @@ from utils.openreview import OpenReviewPapers
 from utils.gsheet import GSheetWithHeader
 
 
-CACHE_ROOT = "data/ICLR2025_NAVER_CANDIDATES"
-CONFERENCE_ID = 'ICLR.cc/2025/Conference'
+CACHE_ROOT = "data/NAACL2025_NAVER_CANDIDATES"
+CONFERENCE_ID = 'aclweb.org/NAACL/2025/Conference'
 KEYWORDS = ["LLM", "VLM", "Security", "Black box", "Foundational models", "Reverse-engineering", "Safety", "Multimodal", "Vision-language",
             "Audit", "Privacy", "Agent", "Reasoning", "Tool", "Human", "RLHF", "RL", "Reinforcement learning", "Reinforcement learning from human feedback"]
 
 GSHEET_JSON = "inner-bridge-282608-030fbb66c110.json"
-GSHEET_TITLE = "ICLR 2025 people to meet"
+GSHEET_TITLE = "NAACL 2025 people to meet"
 GSHEET_SHEET = "Sheet1"
 BATCH_SIZE = 100
 
