@@ -89,7 +89,7 @@ class GSheetWithHeader(GSheetManager):
             current_row_idx = start_row_idx
             
         if index_col is not None:
-            index_col_idx = self.headers[0].index(index_col)
+            index_col_idx = self.headers.index(index_col)
             indices = [row[index_col_idx] for row in self.local_sheet_values[1:]]
             if not indices[-1]:
                 indices = indices[:-1]

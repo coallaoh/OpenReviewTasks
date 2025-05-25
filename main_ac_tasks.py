@@ -17,7 +17,8 @@ CONFERENCE_INFO = {
         NOTE_EXTRACTORS = {
             'review': lambda note: 'preliminary_recommendation' in note.content,
             'comment': lambda note: 'comment' in note.content,
-            'rebuttal': lambda note: False
+            'rebuttal': lambda note: ('pdf' in note.content and 'abstract' not in note.content),
+            'ac_letter': lambda note: ('pdf' in note.content and 'abstract' not in note.content and 'value' in note.content['confidential_comments_to_AC']),
         }
     )
 }[CONFERENCE_NAME]
@@ -26,7 +27,7 @@ CACHE_ROOT = f"data/{CONFERENCE_NAME}/"
 GSHEET_JSON = "inner-bridge-282608-030fbb66c110.json"
 GSHEET_TITLE = f"{CONFERENCE_NAME} AC DB"
 GSHEET_SHEET = "Sheet1"
-INITIALIZE_SHEET = True
+INITIALIZE_SHEET = False
 
 class OpenReviewACPapers(OpenReviewPapers):
     def get_ac_papers_list(self):
