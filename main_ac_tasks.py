@@ -12,7 +12,8 @@ CONFERENCE_INFO = {
     ),
     "ICCV2025": dict(
         CONFERENCE_ID = 'thecvf.com/ICCV/2025/Conference',
-        RATING_EXTRACTOR = lambda review: int(review.content["preliminary_recommendation"]['value'].split(":")[0]),
+        # RATING_EXTRACTOR = lambda review: int(review.content["preliminary_recommendation"]['value'].split(":")[0]),
+        FINAL_RATING_EXTRACTOR = lambda review: int(review.content["final_recommendation"]['value'].split(":")[0]) if "final_recommendation" in review.content and "value" in review.content["final_recommendation"] else None,
         PAPER_NUMBER_EXTRACTOR = lambda paper: paper.number,
         NOTE_EXTRACTORS = {
             'review': lambda note: 'preliminary_recommendation' in note.content,
@@ -73,7 +74,16 @@ class OpenReviewACPapers(OpenReviewPapers):
             all_notes = self.openreview_client.get_notes(forum=paper.forum)
             invitation_str = f'{self.conference_id}/Submission{paper.number}/-/Official_Review'
             reviews = [note for note in all_notes if invitation_str in note.invitations]
-            scores = [CONFERENCE_INFO['RATING_EXTRACTOR'](review) for review in reviews]
+            scores = [CONFERENCE_INFO['RATING_EXTRACTOR'](review) for review in reviews] if 'RATING_EXTRACTOR' in CONFERENCE_INFO else []
+            
+            # Extract final scores if FINAL_RATING_EXTRACTOR is available
+            final_scores = []
+            if 'FINAL_RATING_EXTRACTOR' in CONFERENCE_INFO:
+                final_scores = [CONFERENCE_INFO['FINAL_RATING_EXTRACTOR'](review) for review in reviews]
+                # Filter out None values for average calculation
+                final_scores_filtered = [score for score in final_scores if score is not None]
+            else:
+                final_scores_filtered = []
 
             forum_notes = self.openreview_client.get_notes(forum=paper.forum)
             participating_reviewers = [note.signatures[0] for note in forum_notes if 'comment' in note.content]
@@ -98,6 +108,12 @@ class OpenReviewACPapers(OpenReviewPapers):
                 'reviewer3_score': scores[2] if len(scores) >= 3 else '',
                 'reviewer4_score': scores[3] if len(scores) >= 4 else '',
                 'reviewer5_score': scores[4] if len(scores) >= 5 else '',
+                'avg_final_score': round(sum(final_scores_filtered) / len(final_scores_filtered), 2) if final_scores_filtered else 'N/A',
+                'reviewer1_final_score': final_scores[0] if len(final_scores) >= 1 else '',
+                'reviewer2_final_score': final_scores[1] if len(final_scores) >= 2 else '',
+                'reviewer3_final_score': final_scores[2] if len(final_scores) >= 3 else '',
+                'reviewer4_final_score': final_scores[3] if len(final_scores) >= 4 else '',
+                'reviewer5_final_score': final_scores[4] if len(final_scores) >= 5 else '',
                 **note_counts,
                 'reviewer_participation': len(participating_reviewers),
             })
