@@ -2,7 +2,7 @@ from utils.gsheet import GSheetWithHeader
 from utils.openreview import OpenReviewPapers
 import logging
 
-CONFERENCE_NAME = "ICCV2025"
+CONFERENCE_NAME = "NeurIPS2025"
 CONFERENCE_INFO = {
     "ICML2025": dict(
         CONFERENCE_ID = 'ICML.cc/2025/Conference',
@@ -20,6 +20,16 @@ CONFERENCE_INFO = {
             'comment': lambda note: 'comment' in note.content,
             'rebuttal': lambda note: ('pdf' in note.content and 'abstract' not in note.content),
             'ac_letter': lambda note: ('pdf' in note.content and 'abstract' not in note.content and 'value' in note.content['confidential_comments_to_AC']),
+        }
+    ),
+    "NeurIPS2025": dict(
+        CONFERENCE_ID = 'NeurIPS.cc/2025/Conference',
+        RATING_EXTRACTOR = lambda review: int(review.content["rating"]['value']) if "rating" in review.content and "value" in review.content["rating"] else None,
+        PAPER_NUMBER_EXTRACTOR = lambda paper: paper.number,
+        NOTE_EXTRACTORS = {
+            'review': lambda note: 'rating' in note.content,
+            'comment': lambda note: 'comment' in note.content,
+            'rebuttal': lambda note: ('pdf' in note.content and 'abstract' not in note.content),
         }
     )
 }[CONFERENCE_NAME]
