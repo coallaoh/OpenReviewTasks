@@ -2,6 +2,7 @@ import os
 import json
 import random
 import re
+import logging
 
 import openreview
 from picklecachefunc import check_cache
@@ -12,13 +13,38 @@ from utils.openreview import OpenReviewPapers
 from utils.gsheet import GSheetWithHeader
 
 
-CACHE_ROOT = "data/NAACL2025_NAVER_CANDIDATES"
-CONFERENCE_ID = 'aclweb.org/NAACL/2025/Conference'
-KEYWORDS = ["LLM", "VLM", "Security", "Black box", "Foundational models", "Reverse-engineering", "Safety", "Multimodal", "Vision-language",
-            "Audit", "Privacy", "Agent", "Reasoning", "Tool", "Human", "RLHF", "RL", "Reinforcement learning", "Reinforcement learning from human feedback"]
+# ---------------------------------------------------------------------------
+# Set the conference name here for easy debugging and switching.
+# Example values: "NAACL2025", "ACL2025", "ICML2025"
+# ---------------------------------------------------------------------------
+
+CONFERENCE_NAME = "ICML2025"  # <--- Set your conference here
+
+# Research interest keywords remain global—these do not change with the
+# conference selection.
+KEYWORDS = [
+    "LLM",
+    "VLM",
+    "Security",
+    "Black box",
+    "Foundational models",
+    "Reverse-engineering",
+    "Safety",
+    "Multimodal",
+    "Vision-language",
+    "Audit",
+    "Privacy",
+    "Agent",
+    "Reasoning",
+    "Tool",
+    "Human",
+    "RLHF",
+    "RL",
+    "Reinforcement learning",
+    "Reinforcement learning from human feedback",
+]
 
 GSHEET_JSON = "inner-bridge-282608-030fbb66c110.json"
-GSHEET_TITLE = "NAACL 2025 people to meet"
 GSHEET_SHEET = "Sheet1"
 BATCH_SIZE = 100
 
@@ -37,10 +63,17 @@ SYSTEM_MESSAGE_RELEVANCE = (
 ).format(keyword_list=json.dumps(KEYWORDS, indent=2),
          example_json=json.dumps({keyword: random.choice([True, False]) for keyword in KEYWORDS}, indent=2))
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 class OpenReviewPapersConference(OpenReviewPapers):
     @check_cache(arg_name='file_name', create_dirs=True, override=False)
     def process_one_paper(self, submission, file_name):
+        logging.debug(f"Processing paper ID: {submission.id}")
         data = {
             "id": submission.id,
             "title": submission.content['title']['value'],
@@ -57,10 +90,12 @@ class OpenReviewPapersConference(OpenReviewPapers):
                     author_ids = submission.content['authorids']['value']
                 
                 if not author_ids:
+                    logging.warning(f"No author IDs found for submission {submission.id}")
                     return data
                 
                 first_author_profile = openreview.tools.get_profiles(self.openreview_client, [author_ids[0]])[0]
                 if not first_author_profile:
+                    logging.warning(f"No profile found for first author {author_ids[0]} in submission {submission.id}")
                     return data
                 
                 history = first_author_profile.content.get("history")
@@ -78,6 +113,7 @@ class OpenReviewPapersConference(OpenReviewPapers):
                             if start_year is not None and (end_year is None or end_year >= 2025):
                                 is_phd_student = True
                                 alma_mater = entry['institution']['name']
+                                logging.debug(f"Querying location for alma mater: {alma_mater}")
                                 llm_response = chatgpt(
                                     user_prompts=[f"What is the location of {alma_mater}?"],
                                     system_prompt="You are a helpful assistant that can answer questions about the location of a university or institution. Choose one of the following: Europe, US, Korea, Asia, Other and return only the location.",
@@ -112,23 +148,28 @@ class OpenReviewPapersConference(OpenReviewPapers):
                 }
                 data["authors"].append(author_data)
         except Exception as e:
-            print(f"Error extracting author info from submission {submission.id}: {e}")
+            logging.error(f"Error extracting author info from submission {submission.id}: {e}")
             return data
 
         return data
     def get_papers_list(self, cache_root):
+        logging.info(f"Fetching papers for conference: {self.conference_id}")
         submissions = self.openreview_client.get_all_notes(content={'venueid': self.conference_id})
+        logging.info(f"Total submissions fetched: {len(submissions)}")
         if DEBUG:
             submissions = submissions[:5]  # Process only a smaller number of papers if DEBUG is True
+            logging.info(f"DEBUG mode: Only processing first {len(submissions)} submissions.")
         data_list = []
         for submission in tqdm.tqdm(submissions):
             file_name = os.path.join(cache_root, f"{submission.id}.pkl")
             data_list.append(
                 self.process_one_paper(submission, file_name=file_name)
             )
+        logging.info(f"Processed {len(data_list)} papers.")
         return data_list
 
 def check_relevance(data, cache_name):
+    logging.debug(f"Checking relevance for paper ID: {data['id']}")
     response_str = chatgpt(
         system_prompt=SYSTEM_MESSAGE_RELEVANCE,
         user_prompts=[f"Context paper to analyze: \n###\n{data['title']}\n###\n. \n###\n{data['abstract']}\n###\n."],
@@ -142,19 +183,21 @@ def check_relevance(data, cache_name):
     try:
         response = json.loads(response_str)
     except json.JSONDecodeError:
-        print(f"Failed to decode JSON for paper ID {data['id']}")
+        logging.error(f"Failed to decode JSON for paper ID {data['id']}")
         return None
     
     return {"data": data, "response": response}
 
 def process_data_for_sheet(data):
     # Check relevance and get output
+    logging.debug(f"Processing data for Google Sheet for paper ID: {data['id']}")
     relevance_output = check_relevance(
         data=data,
         cache_name=os.path.join(CACHE_ROOT, "gpt-3.5-turbo", f"{data['id']}.pkl"))
     
     # Skip if no relevance or if JSON decoding failed
     if relevance_output is None or not any(relevance_output['response'].values()):
+        logging.info(f"Paper ID {data['id']} is not relevant or failed relevance check.")
         return None
     
     # Extract categories
@@ -166,16 +209,73 @@ def process_data_for_sheet(data):
         "Categories": categories,
         "#Categories": len(categories.split(",")),
     }
+    logging.debug(f"Prepared row for paper ID {data['id']}: {row}")
     return row
 
-def main():
-    openreview_papers = OpenReviewPapersConference(
-        conference_id=CONFERENCE_ID,
+# Helper utilities for conference configuration
+# ---------------------------------------------------------------------------
+
+# Lookup table for supported conferences
+CONFERENCE_CONFIGS = {
+    "NAACL2025": {
+        "CONFERENCE_ID": "aclweb.org/NAACL/2025/Conference",
+        "CACHE_ROOT": "data/NAACL2025_NAVER_CANDIDATES",
+        "GSHEET_TITLE": "NAACL 2025 people to meet",
+    },
+    "ACL2025": {
+        "CONFERENCE_ID": "aclweb.org/ACL/2025/Conference",
+        "CACHE_ROOT": "data/ACL2025_NAVER_CANDIDATES",
+        "GSHEET_TITLE": "ACL 2025 people to meet",
+    },
+    "ICML2025": {
+        "CONFERENCE_ID": "ICML.cc/2025/Conference",
+        "CACHE_ROOT": "data/ICML2025_NAVER_CANDIDATES",
+        "GSHEET_TITLE": "ICML 2025 people to meet",
+    },
+    # Add more conferences as needed
+}
+
+def get_conference_config(conf_name: str):
+    conf_name = conf_name.upper()
+    if conf_name not in CONFERENCE_CONFIGS:
+        raise ValueError(f"Conference '{conf_name}' is not in the supported conference list: {list(CONFERENCE_CONFIGS.keys())}")
+    return (
+        CONFERENCE_CONFIGS[conf_name]["CONFERENCE_ID"],
+        CONFERENCE_CONFIGS[conf_name]["CACHE_ROOT"],
+        CONFERENCE_CONFIGS[conf_name]["GSHEET_TITLE"],
     )
-    data_list = openreview_papers.get_papers_list(cache_root=CACHE_ROOT)
+
+def main():
+    logging.info("Starting script to select interesting papers.")
+
+    try:
+        conf_id, cache_root, gsheet_title = get_conference_config(CONFERENCE_NAME)
+        logging.info(f"Selected conference: {CONFERENCE_NAME}")
+        logging.info(f"Conference ID: {conf_id}")
+        logging.info(f"Cache root: {cache_root}")
+        logging.info(f"Google Sheet title: {gsheet_title}")
+    except ValueError as exc:
+        logging.error(f"[ERROR] {exc}")
+        return
+
+    # Ensure all helper functions that rely on the global CACHE_ROOT pick up the
+    # user-selected conference.
+    global CACHE_ROOT  # pylint: disable=global-variable-undefined
+    CACHE_ROOT = cache_root
+
+    # ---------------------------------------------------------------------
+    # 2. Instantiate helper classes with the selected configuration.
+    # ---------------------------------------------------------------------
+
+    openreview_papers = OpenReviewPapersConference(
+        conference_id=conf_id,
+    )
+    data_list = openreview_papers.get_papers_list(cache_root=cache_root)
     
     # Initialize Google Sheet writer
-    gsheet_writer = GSheetWithHeader(key_file=GSHEET_JSON, doc_name=GSHEET_TITLE, sheet_name=GSHEET_SHEET)
+    gsheet_writer = GSheetWithHeader(
+        key_file=GSHEET_JSON, doc_name=gsheet_title, sheet_name=GSHEET_SHEET
+    )
 
     # Process data and prepare rows for Google Sheet
     rows = []
@@ -188,14 +288,29 @@ def main():
         # Write to Google Sheet every BATCH_SIZE rows
         if len(rows) >= BATCH_SIZE:
             headers = list(row.keys())
-            gsheet_writer.write_rows(rows, empty_sheet=False, headers=headers, write_headers=(start_row_idx == 0), start_row_idx=start_row_idx)
+            logging.info(f"Writing {len(rows)} rows to Google Sheet at row {start_row_idx}.")
+            gsheet_writer.write_rows(
+                rows,
+                empty_sheet=False,
+                headers=headers,
+                write_headers=(start_row_idx == 0),
+                start_row_idx=start_row_idx,
+            )
             start_row_idx += len(rows)  # Update start_row_idx
             rows = []  # Clear rows after writing
 
     # Write any remaining rows to Google Sheet
     if rows:
         headers = list(row.keys())
-        gsheet_writer.write_rows(rows, empty_sheet=False, headers=headers, write_headers=(start_row_idx == 0), start_row_idx=start_row_idx)
+        logging.info(f"Writing final {len(rows)} rows to Google Sheet at row {start_row_idx}.")
+        gsheet_writer.write_rows(
+            rows,
+            empty_sheet=False,
+            headers=headers,
+            write_headers=(start_row_idx == 0),
+            start_row_idx=start_row_idx,
+        )
+    logging.info("Script finished.")
 
 if __name__ == "__main__":
     main()
