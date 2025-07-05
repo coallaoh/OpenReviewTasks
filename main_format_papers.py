@@ -94,7 +94,7 @@ def process_data_for_sheet(data):
     # Check relevance and get output
     relevance_output = check_relevance(
         data=data,
-        cache_name=os.path.join(CACHE_ROOT, "gpt-4o", f"{data['title']}.pkl"))
+        cache_name=os.path.join(CACHE_ROOT, "gpt-4.1", f"{data['title']}.pkl"))
     
     # Skip if no relevance or if JSON decoding failed
     if relevance_output is None or not any(relevance_output['response'].values()):

@@ -13,7 +13,7 @@ import tqdm
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 @check_cache(arg_name="file_name", create_dirs=True)
-def chatgpt(system_prompt, user_prompts, file_name, model_name="gpt-4o"):
+def chatgpt(system_prompt, user_prompts, file_name, model_name="gpt-4.1"):
     logging.info("Starting chatgpt function")
     client = OpenAI(
         api_key=os.environ.get("OPENAI_API_KEY"),
@@ -43,7 +43,7 @@ def chatgpt(system_prompt, user_prompts, file_name, model_name="gpt-4o"):
     return responses
 
 
-def create_batch_requests(system_prompt: str, user_prompts: List[str], model_name: str = "gpt-4o") -> List[Dict[str, Any]]:
+def create_batch_requests(system_prompt: str, user_prompts: List[str], model_name: str = "gpt-4.1") -> List[Dict[str, Any]]:
     """Create batch request objects for OpenAI batch API."""
     requests = []
     for i, user_prompt in enumerate(user_prompts):
@@ -172,7 +172,7 @@ def parse_batch_results(output_path: str) -> Dict[str, str]:
 
 
 @check_cache(arg_name="file_name", create_dirs=True)
-def chatgpt_batch(system_prompt: str, user_prompts: List[str], file_name: str, model_name: str = "gpt-4o", 
+def chatgpt_batch(system_prompt: str, user_prompts: List[str], file_name: str, model_name: str = "gpt-4.1", 
                   batch_description: str = "Paper relevance batch job") -> List[str]:
     """Process prompts using OpenAI batch API."""
     logging.info(f"Starting batch processing for {len(user_prompts)} prompts")
@@ -275,7 +275,7 @@ def test_chatgpt():
     system_prompt = "You are an AI assistant."
     user_prompts = ["What is the capital of France?", "What is the largest mammal?"]
     file_name = "cache/test_chatgpt.pkl"
-    model_name = "gpt-4o-mini"
+    model_name = "gpt-4.1"
 
     responses = chatgpt(system_prompt=system_prompt, user_prompts=user_prompts, file_name=file_name, model_name=model_name)
     

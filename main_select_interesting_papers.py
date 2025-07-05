@@ -7,7 +7,7 @@ import openreview
 from picklecachefunc import check_cache
 import tqdm
 
-from utils.chatbots import chatgpt_batch, chatgpt
+from utils.chatbots import chatgpt
 from utils.openreview import OpenReviewPapers
 from utils.gsheet import GSheetWithHeader
 
@@ -112,8 +112,8 @@ class OpenReviewPapersConference(OpenReviewPapers):
                             if start_year is not None and (end_year is None or end_year >= 2025):
                                 is_phd_student = True
                                 alma_mater = entry['institution']['name']
-                                # Store alma mater for batch processing later
-                                # For now, set as unknown - will be processed in batch
+                                # Store alma mater for processing later
+                                # For now, store institution name - will be processed individually
                                 phd_location = alma_mater  # Store institution name temporarily
                     sorted_positions = sorted(positions.items(), key=lambda x: (x[0] if x[0] is not None else float('-inf')), reverse=True)
                     sorted_positions = [position for _, position in sorted_positions]
@@ -154,101 +154,34 @@ class OpenReviewPapersConference(OpenReviewPapers):
         logging.info(f"Processed {len(data_list)} papers.")
         return data_list
 
-def check_relevance_batch(data_list, cache_root):
-    """Check relevance for all papers using batch processing."""
-    logging.info(f"Checking relevance for {len(data_list)} papers using batch processing")
+def check_relevance(data_list, cache_root):
+    """Check relevance for all papers using individual API calls."""
+    logging.info(f"Checking relevance for {len(data_list)} papers using individual API calls")
     
-    # Prepare prompts for batch processing
-    user_prompts = []
-    for data in data_list:
-        prompt = f"Context paper to analyze: \n###\n{data['title']}\n###\n. \n###\n{data['abstract']}\n###\n."
-        user_prompts.append(prompt)
-    
-    # Use batch processing
-    batch_cache_name = os.path.join(cache_root, "relevance_batch.pkl")
-    response_strings = chatgpt_batch(
-        system_prompt=SYSTEM_MESSAGE_RELEVANCE,
-        user_prompts=user_prompts,
-        file_name=batch_cache_name,
-        model_name="gpt-4o-mini",
-        batch_description="Paper relevance analysis batch"
-    )
-    
-    # Process responses
     results = []
-    for i, (data, response_str) in enumerate(zip(data_list, response_strings)):
-        logging.debug(f"Processing response for paper ID: {data['id']}")
-        
-        # Handle the case where response_str is in the format with ```json
-        if response_str.startswith('```json'):
-            response_str = response_str.strip('```json\n').strip('```')
-        
+    for data in tqdm.tqdm(data_list, desc="Processing papers individually"):
         try:
+            cache_name = os.path.join(cache_root, "gpt-4.1", f"{data['id']}.pkl")
+            response_str = chatgpt(
+                system_prompt=SYSTEM_MESSAGE_RELEVANCE,
+                user_prompts=[f"Context paper to analyze: \n###\n{data['title']}\n###\n. \n###\n{data['abstract']}\n###\n."],
+                file_name=cache_name,
+                model_name="gpt-4.1"
+            )[0]
+            
+            # Handle the case where response_str is in the format with ```json
+            if response_str.startswith('```json'):
+                response_str = response_str.strip('```json\n').strip('```')
+            
             response = json.loads(response_str)
             results.append({"data": data, "response": response})
-        except json.JSONDecodeError:
-            logging.error(f"Failed to decode JSON for paper ID {data['id']}")
+        except Exception as individual_error:
+            logging.error(f"Failed to process paper {data['id']}: {individual_error}")
             results.append(None)
     
     return results
 
-def check_relevance_batch_with_fallback(data_list, cache_root):
-    """Check relevance using batch processing with fallback to individual calls."""
-    try:
-        return check_relevance_batch(data_list, cache_root)
-    except Exception as e:
-        logging.warning(f"Batch processing failed: {e}")
-        logging.info("Falling back to individual API calls...")
-        
-        results = []
-        for data in tqdm.tqdm(data_list, desc="Processing papers individually"):
-            try:
-                cache_name = os.path.join(cache_root, "gpt-4o-mini", f"{data['id']}.pkl")
-                response_str = chatgpt(
-                    system_prompt=SYSTEM_MESSAGE_RELEVANCE,
-                    user_prompts=[f"Context paper to analyze: \n###\n{data['title']}\n###\n. \n###\n{data['abstract']}\n###\n."],
-                    file_name=cache_name,
-                    model_name="gpt-4o-mini"
-                )[0]
-                
-                # Handle the case where response_str is in the format with ```json
-                if response_str.startswith('```json'):
-                    response_str = response_str.strip('```json\n').strip('```')
-                
-                response = json.loads(response_str)
-                results.append({"data": data, "response": response})
-            except Exception as individual_error:
-                logging.error(f"Failed to process paper {data['id']}: {individual_error}")
-                results.append(None)
-        
-        return results
 
-def test_batch_api(cache_root):
-    """Test the batch API with a simple request to ensure it's working."""
-    logging.info("Testing batch API functionality...")
-    
-    try:
-        test_prompts = ["What is 2+2?", "What color is the sky?"]
-        test_cache_name = os.path.join(cache_root, "batch_api_test.pkl")
-        
-        responses = chatgpt_batch(
-            system_prompt="You are a helpful assistant.",
-            user_prompts=test_prompts,
-            file_name=test_cache_name,
-            model_name="gpt-4o-mini",
-            batch_description="Batch API test"
-        )
-        
-        if len(responses) == len(test_prompts) and all(response for response in responses):
-            logging.info("Batch API test passed successfully!")
-            return True
-        else:
-            logging.warning("Batch API test failed - incomplete responses")
-            return False
-            
-    except Exception as e:
-        logging.error(f"Batch API test failed: {e}")
-        return False
 
 def clean_data_for_gsheets(data):
     """Clean data to ensure compatibility with Google Sheets API."""
@@ -282,7 +215,7 @@ def clean_data_for_gsheets(data):
         return str(data)
 
 def process_relevance_results_for_sheet(relevance_results):
-    """Process batch relevance results for Google Sheet."""
+    """Process relevance results for Google Sheet."""
     logging.info(f"Processing {len(relevance_results)} relevance results for Google Sheet")
     
     rows = []
@@ -334,9 +267,9 @@ def process_relevance_results_for_sheet(relevance_results):
     
     return rows
 
-def process_alma_mater_locations_batch(data_list, cache_root):
-    """Process alma mater locations for all papers using batch processing."""
-    logging.info("Processing alma mater locations in batch...")
+def process_alma_mater_locations(data_list, cache_root):
+    """Process alma mater locations for all papers using individual API calls."""
+    logging.info("Processing alma mater locations individually...")
     
     # Collect all unique alma maters that need location processing
     alma_maters_to_process = set()
@@ -352,51 +285,32 @@ def process_alma_mater_locations_batch(data_list, cache_root):
     alma_maters_list = list(alma_maters_to_process)
     logging.info(f"Processing {len(alma_maters_list)} unique alma maters for location.")
     
-    try:
-        # Prepare prompts for batch processing
-        user_prompts = [f"What is the location of {alma_mater}?" for alma_mater in alma_maters_list]
-        
-        # Use batch processing for location queries
-        batch_cache_name = os.path.join(cache_root, "alma_mater_locations_batch.pkl")
-        response_strings = chatgpt_batch(
-            system_prompt="You are a helpful assistant that can answer questions about the location of a university or institution. Choose one of the following: Europe, US, Korea, Asia, Other and return only the location.",
-            user_prompts=user_prompts,
-            file_name=batch_cache_name,
-            model_name="gpt-4o-mini",
-            batch_description="Alma mater location batch"
-        )
-    except Exception as e:
-        logging.warning(f"Batch processing failed for alma mater locations: {e}")
-        logging.info("Falling back to individual API calls for alma mater locations...")
-        
-        response_strings = []
-        for alma_mater in tqdm.tqdm(alma_maters_list, desc="Processing alma maters individually"):
-            try:
-                cache_name = os.path.join(cache_root, "alma_mater_individual", f"{alma_mater.replace('/', '_').replace(' ', '_')}.pkl")
-                response_str = chatgpt(
-                    system_prompt="You are a helpful assistant that can answer questions about the location of a university or institution. Choose one of the following: Europe, US, Korea, Asia, Other and return only the location.",
-                    user_prompts=[f"What is the location of {alma_mater}?"],
-                    file_name=cache_name,
-                    model_name="gpt-4o-mini"
-                )[0]
-                response_strings.append(response_str)
-            except Exception as individual_error:
-                logging.error(f"Failed to process alma mater {alma_mater}: {individual_error}")
-                response_strings.append("Other")  # Default fallback
-    
-    # Create location mapping
+    # Process alma maters individually
     location_mapping = {}
-    for alma_mater, response_str in zip(alma_maters_list, response_strings):
-        if response_str.startswith("Europe"):
-            location_mapping[alma_mater] = "Europe"
-        elif response_str.startswith("US"):
-            location_mapping[alma_mater] = "US"
-        elif response_str.startswith("Korea"):
-            location_mapping[alma_mater] = "Korea"
-        elif response_str.startswith("Asia"):
-            location_mapping[alma_mater] = "Asia"
-        else:
-            location_mapping[alma_mater] = "Other"
+    for alma_mater in tqdm.tqdm(alma_maters_list, desc="Processing alma maters individually"):
+        try:
+            cache_name = os.path.join(cache_root, "alma_mater_individual", f"{alma_mater.replace('/', '_').replace(' ', '_')}.pkl")
+            response_str = chatgpt(
+                system_prompt="You are a helpful assistant that can answer questions about the location of a university or institution. Choose one of the following: Europe, US, Korea, Asia, Other and return only the location.",
+                user_prompts=[f"What is the location of {alma_mater}?"],
+                file_name=cache_name,
+                model_name="gpt-4.1"
+            )[0]
+            
+            # Map response to standardized location
+            if response_str.startswith("Europe"):
+                location_mapping[alma_mater] = "Europe"
+            elif response_str.startswith("US"):
+                location_mapping[alma_mater] = "US"
+            elif response_str.startswith("Korea"):
+                location_mapping[alma_mater] = "Korea"
+            elif response_str.startswith("Asia"):
+                location_mapping[alma_mater] = "Asia"
+            else:
+                location_mapping[alma_mater] = "Other"
+        except Exception as individual_error:
+            logging.error(f"Failed to process alma mater {alma_mater}: {individual_error}")
+            location_mapping[alma_mater] = "Other"  # Default fallback
     
     # Update data_list with processed locations
     for data in data_list:
@@ -467,22 +381,18 @@ def main():
     )
     data_list = openreview_papers.get_papers_list(cache_root=cache_root)
 
-    # Process alma mater locations in batch
-    data_list = process_alma_mater_locations_batch(data_list, cache_root)
+    # Process alma mater locations individually
+    data_list = process_alma_mater_locations(data_list, cache_root)
 
     # Initialize Google Sheet writer
     gsheet_writer = GSheetWithHeader(
         key_file=GSHEET_JSON, doc_name=gsheet_title, sheet_name=GSHEET_SHEET
     )
 
-    # Process all papers using batch API for relevance checking
-    logging.info("Starting batch relevance checking...")
+    # Process all papers for relevance checking
+    logging.info("Starting relevance checking...")
     
-    # Test batch API first
-    if not test_batch_api(cache_root):
-        logging.warning("Batch API test failed, but continuing with fallback enabled...")
-    
-    relevance_results = check_relevance_batch_with_fallback(data_list, cache_root)
+    relevance_results = check_relevance(data_list, cache_root)
     
     # Process relevance results and prepare rows for Google Sheet
     logging.info("Processing relevance results for Google Sheet...")
