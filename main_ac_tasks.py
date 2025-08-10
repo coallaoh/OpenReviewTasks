@@ -27,9 +27,13 @@ CONFERENCE_INFO = {
         RATING_EXTRACTOR = lambda review: int(review.content["rating"]['value']) if "rating" in review.content and "value" in review.content["rating"] else None,
         PAPER_NUMBER_EXTRACTOR = lambda paper: paper.number,
         NOTE_EXTRACTORS = {
-            'review': lambda note: 'rating' in note.content,
-            'comment': lambda note: 'comment' in note.content,
-            'rebuttal': lambda note: ('pdf' in note.content and 'abstract' not in note.content),
+            'review': lambda note: any(invitation.endswith('Official_Review') for invitation in note.invitations),
+            'other_comment': lambda note: any(invitation.endswith('Official_Comment') for invitation in note.invitations) and not (any(writer for writer in note.writers if writer.split('/')[-1].startswith('Reviewer')) and any(reader for reader in note.readers if reader.split('/')[-1].startswith('Author'))),
+            'discussion_comment': lambda note: any(invitation.endswith('Official_Comment') for invitation in note.invitations) and any(writer for writer in note.writers if writer.split('/')[-1].startswith('Reviewer')) and any(reader for reader in note.readers if reader.split('/')[-1].startswith('Author')),
+            'rebuttal': lambda note: any(invitation.endswith('Rebuttal') for invitation in note.invitations),
+            'rebuttal_acknowledgement': lambda note: any(invitation.endswith('Mandatory_Acknowledgement') for invitation in note.invitations),
+            'ac_letter_author': lambda note: any(invitation.endswith('Author_AC_Confidential_Comment') for invitation in note.invitations) and any(writer for writer in note.writers if writer.split('/')[-1].startswith('Author')),
+            'ac_letter_ac': lambda note: any(invitation.endswith('Author_AC_Confidential_Comment') for invitation in note.invitations) and any(writer for writer in note.writers if writer.split('/')[-1].startswith('Area_Chair')),
         }
     )
 }[CONFERENCE_NAME]
@@ -103,6 +107,8 @@ class OpenReviewACPapers(OpenReviewPapers):
                 for key, note_extractor in CONFERENCE_INFO['NOTE_EXTRACTORS'].items():
                     if note_extractor(note):
                         note_counts[key + '_count'] += 1
+                        
+            note_counts['others_count'] = len(forum_notes) - sum(note_counts.values())
 
             paper_url = f"https://openreview.net/forum?id={paper.forum}"
 
