@@ -238,31 +238,108 @@ class OpenReviewACPapers(OpenReviewPapers):
             logging.warning("You are not an area chair for %s.", self.conference_id)
             return []
 
-        logging.info("Retrieving submissions")
-        submissions = self.openreview_client.get_notes(
-            invitation=f'{self.conference_id}/-/Submission',
-            details='replicated',
-            limit=1000
-        )
-        logging.info("Found %d submissions", len(submissions))
-
         user_id = profile.id
         logging.info("Getting groups for user %s", user_id)
         user_groups = self.openreview_client.get_groups(member=user_id)
-        ac_groups = [g.id for g in user_groups if 'Area_Chairs' in g.id]
+        # Get all AC-related groups (both Area_Chair and Area_Chairs)
+        ac_groups = [g.id for g in user_groups if 'Area_Chair' in g.id]
         logging.info("Found %d AC groups for user", len(ac_groups))
+
+        # Extract paper numbers from AC groups (e.g., "Submission10059" -> 10059)
+        # Try two methods:
+        # 1. Look for specific AC assignments (Area_Chair_{code}) - used by ICLR
+        # 2. Fall back to checking paper.readers if method 1 finds nothing - used by others
+        assigned_paper_numbers = set()
+        specific_ac_groups = []
+        pool_ac_groups = []
+        
+        for ac_group in ac_groups:
+            # Method 1: Look for specific assignments like "ICLR.cc/2026/Conference/Submission10059/Area_Chair_wGtT"
+            if (self.conference_id in ac_group and 
+                '/Submission' in ac_group and 
+                '/Area_Chair_' in ac_group):
+                specific_ac_groups.append(ac_group)
+                parts = ac_group.split('/Submission')
+                if len(parts) > 1:
+                    paper_num_str = parts[1].split('/')[0]
+                    try:
+                        assigned_paper_numbers.add(int(paper_num_str))
+                    except ValueError:
+                        pass
+            # Method 2: Collect pool groups for fallback (e.g., ".../Submission123/Area_Chairs")
+            elif (self.conference_id in ac_group and 
+                  '/Submission' in ac_group and 
+                  ac_group.endswith('/Area_Chairs')):
+                pool_ac_groups.append(ac_group)
+        
+        use_specific_assignment = len(specific_ac_groups) > 0
+        
+        if use_specific_assignment:
+            logging.info("Found %d specific AC assignment groups (Area_Chair_XXX) for %s", 
+                         len(specific_ac_groups), self.conference_id)
+            logging.info("Using specific AC assignment method")
+        else:
+            logging.info("No specific AC assignments found, will use paper.readers method (legacy)")
+            logging.info("Found %d pool AC groups for %s", len(pool_ac_groups), self.conference_id)
+        
+        if assigned_paper_numbers:
+            logging.info("Pre-filtered %d assigned paper numbers", len(assigned_paper_numbers))
+            logging.info("Assigned papers: %s", sorted(list(assigned_paper_numbers)))
+
+        # Now retrieve submissions - need to do multiple API calls to get all
+        logging.info("Retrieving submissions")
+        all_submissions = []
+        offset = 0
+        batch_size = 1000
+        
+        while True:
+            submissions_batch = self.openreview_client.get_notes(
+                invitation=f'{self.conference_id}/-/Submission',
+                details='replicated',
+                limit=batch_size,
+                offset=offset
+            )
+            if not submissions_batch:
+                break
+            all_submissions.extend(submissions_batch)
+            logging.info("Retrieved %d submissions (total: %d)", len(submissions_batch), len(all_submissions))
+            offset += batch_size
+            
+            # Stop if we got less than a full batch (means we're at the end)
+            if len(submissions_batch) < batch_size:
+                break
+        
+        submissions = all_submissions
+        logging.info("Found %d total submissions", len(submissions))
 
         paper_data = []
         logging.info("Processing papers assigned to AC")
+        papers_checked = 0
+        papers_matched = 0
+        
         for paper in submissions:
-            ac_group_id_for_paper = f'{self.conference_id}/Submission{paper.number}/Area_Chairs'
-            if ac_group_id_for_paper not in paper.readers:
-                logging.debug("Paper %d is not part of your area chair task.", paper.number)
+            papers_checked += 1
+            
+            # Check assignment using the appropriate method
+            is_assigned = False
+            
+            if use_specific_assignment:
+                # Method 1: Check if paper number is in pre-filtered list (ICLR style)
+                is_assigned = paper.number in assigned_paper_numbers
+            else:
+                # Method 2: Legacy method - check paper.readers (NeurIPS/ICCV style)
+                ac_group_id_for_paper = f'{self.conference_id}/Submission{paper.number}/Area_Chairs'
+                if ac_group_id_for_paper in paper.readers:
+                    # Also check if you're actually in one of the AC groups for this paper
+                    if any(ac_group in paper.readers for ac_group in pool_ac_groups):
+                        is_assigned = True
+            
+            if not is_assigned:
+                logging.debug("Paper %d is not assigned to you as AC.", paper.number)
                 continue
-
-            if not any(ac_group in paper.readers for ac_group in ac_groups):
-                logging.debug("You are not assigned to paper %d as an AC.", paper.number)
-                continue
+            
+            papers_matched += 1
+            logging.info("Processing assigned paper %d", paper.number)
 
             logging.debug("Processing paper %d", paper.number)
             all_notes = self.openreview_client.get_notes(forum=paper.forum)
@@ -330,6 +407,7 @@ class OpenReviewACPapers(OpenReviewPapers):
             logging.debug("Added paper %d to results", paper.number)
 
         logging.info("Retrieved data for %d papers assigned to AC", len(paper_data))
+        logging.info("Papers checked: %d, Papers matched: %d", papers_checked, papers_matched)
         return paper_data
 
 
