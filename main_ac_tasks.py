@@ -14,6 +14,12 @@ logging.basicConfig(
 )
 
 CONFERENCE_NAME = "ICLR2026"
+CACHE_ROOT = f"data/{CONFERENCE_NAME}/"
+GSHEET_JSON = "inner-bridge-282608-030fbb66c110.json"
+GSHEET_TITLE = f"{CONFERENCE_NAME} AC DB"
+GSHEET_SHEET = "Sheet1"
+INITIALIZE_SHEET = False
+
 CONFERENCE_INFO = {
     "ICML2025": dict(
         CONFERENCE_ID = 'ICML.cc/2025/Conference',
@@ -204,11 +210,6 @@ CONFERENCE_INFO = {
     )
 }[CONFERENCE_NAME]
 
-CACHE_ROOT = f"data/{CONFERENCE_NAME}/"
-GSHEET_JSON = "inner-bridge-282608-030fbb66c110.json"
-GSHEET_TITLE = f"{CONFERENCE_NAME} AC DB"
-GSHEET_SHEET = "Sheet1"
-INITIALIZE_SHEET = True
 
 class OpenReviewACPapers(OpenReviewPapers):
     """
@@ -286,31 +287,50 @@ class OpenReviewACPapers(OpenReviewPapers):
             logging.info("Pre-filtered %d assigned paper numbers", len(assigned_paper_numbers))
             logging.info("Assigned papers: %s", sorted(list(assigned_paper_numbers)))
 
-        # Now retrieve submissions - need to do multiple API calls to get all
-        logging.info("Retrieving submissions")
-        all_submissions = []
-        offset = 0
-        batch_size = 1000
-        
-        while True:
-            submissions_batch = self.openreview_client.get_notes(
-                invitation=f'{self.conference_id}/-/Submission',
-                details='replicated',
-                limit=batch_size,
-                offset=offset
-            )
-            if not submissions_batch:
-                break
-            all_submissions.extend(submissions_batch)
-            logging.info("Retrieved %d submissions (total: %d)", len(submissions_batch), len(all_submissions))
-            offset += batch_size
+        # Retrieve submissions - optimize by fetching only assigned papers if possible
+        if use_specific_assignment and assigned_paper_numbers:
+            # Optimization: fetch only the papers we know are assigned
+            logging.info("Retrieving only assigned submissions (optimized)")
+            submissions = []
+            for paper_num in sorted(assigned_paper_numbers):
+                try:
+                    paper_notes = self.openreview_client.get_notes(
+                        invitation=f'{self.conference_id}/-/Submission',
+                        details='replicated',
+                        number=paper_num
+                    )
+                    if paper_notes:
+                        submissions.extend(paper_notes)
+                        logging.debug("Retrieved paper %d", paper_num)
+                except Exception as e:
+                    logging.warning("Failed to retrieve paper %d: %s", paper_num, e)
+            logging.info("Retrieved %d assigned submissions", len(submissions))
+        else:
+            # Fallback: retrieve all submissions (needed for legacy method)
+            logging.info("Retrieving all submissions (legacy method)")
+            all_submissions = []
+            offset = 0
+            batch_size = 1000
             
-            # Stop if we got less than a full batch (means we're at the end)
-            if len(submissions_batch) < batch_size:
-                break
-        
-        submissions = all_submissions
-        logging.info("Found %d total submissions", len(submissions))
+            while True:
+                submissions_batch = self.openreview_client.get_notes(
+                    invitation=f'{self.conference_id}/-/Submission',
+                    details='replicated',
+                    limit=batch_size,
+                    offset=offset
+                )
+                if not submissions_batch:
+                    break
+                all_submissions.extend(submissions_batch)
+                logging.info("Retrieved %d submissions (total: %d)", len(submissions_batch), len(all_submissions))
+                offset += batch_size
+                
+                # Stop if we got less than a full batch (means we're at the end)
+                if len(submissions_batch) < batch_size:
+                    break
+            
+            submissions = all_submissions
+            logging.info("Found %d total submissions", len(submissions))
 
         paper_data = []
         logging.info("Processing papers assigned to AC")
