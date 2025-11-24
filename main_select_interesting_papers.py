@@ -341,6 +341,11 @@ CONFERENCE_CONFIGS = {
         "CACHE_ROOT": "data/ICML2025_NAVER_CANDIDATES",
         "GSHEET_TITLE": "ICML 2025 people to meet",
     },
+    "NeurIPS2025": {
+        "CONFERENCE_ID": "NeurIPS.cc/2025/Conference",
+        "CACHE_ROOT": "data/NeurIPS2025_NAVER_CANDIDATES",
+        "GSHEET_TITLE": "NeurIPS 2025 people to meet",
+    },
     # Add more conferences as needed
 }
 
